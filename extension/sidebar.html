@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LendingLens</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="offlineBanner" class="offline-banner">No internet connection - cached data only</div>
+  <div id="app">
+    <header>
+      <div style="display:flex;flex-direction:column;">
+        <h1>LendingLens</h1>
+        <span id="modelStatus" class="small"></span>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button id="themeBtn" title="Toggle Light/Dark">🌙</button>
+        <button id="infoBtn" title="Sample Queries">ℹ️</button>
+        <button id="settingsBtn" title="Settings">⚙️</button>
+      </div>
+    </header>
+    <div id="offlineNotice" style="display:none;background:#ff6b6b22;padding:4px 12px;font-size:11px;text-align:center;">Offline - using cached data only</div>
+    <main id="chat"></main>
+    <form id="promptForm" class="typeahead-wrap">
+      <div id="typeaheadDropdown" class="typeahead-dropdown"></div>
+      <input id="promptInput" placeholder="Explore loans, lenders, and markets…" autocomplete="off" />
+      <span class="shortcut-hint" id="shortcutHint">Ctrl+/</span>
+      <button type="submit">Send</button>
+    </form>
+  </div>
+  <script src="sidebar.js" defer></script>
+</body>
+</html>

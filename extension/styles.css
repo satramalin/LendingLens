@@ -1,0 +1,95 @@
+body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#0b1b2b;color:#e6edf3}
+#app{display:flex;flex-direction:column;height:100vh}
+header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#0f2438;border-bottom:1px solid #153955}
+main#chat{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.message{border-radius:10px;padding:10px;max-width:90%}
+.message.user{align-self:flex-end;background:#2b3e50}
+.message.assistant{align-self:flex-start;background:#153955}
+.message.system{align-self:center;background:#23435f}
+form#promptForm{display:flex;gap:8px;padding:10px;background:#0f2438;border-top:1px solid #153955}
+#promptInput{flex:1;padding:10px;border-radius:8px;border:1px solid #153955;background:#0b1b2b;color:#e6edf3}
+button{background:#2d6cdf;color:white;border:none;border-radius:8px;padding:10px 14px;cursor:pointer}
+button:disabled{opacity:.6;cursor:not-allowed}
+header button{background:transparent;border:none;padding:6px 10px;font-size:16px;opacity:0.7;transition:all .2s ease}
+header button:hover{opacity:1;background:rgba(45,108,223,0.15)}
+.settings{position:fixed;top:12px;right:12px;background:#0f2438;border:1px solid #153955;border-radius:10px;padding:12px;z-index:10;display:none}
+.settings.show{display:block}
+.settings label{display:block;margin:8px 0 4px}
+.settings input{width:100%;padding:8px;border-radius:6px;border:1px solid #153955;background:#0b1b2b;color:#e6edf3}
+.small{font-size:12px;opacity:.8}
+#modelStatus{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0.7}
+
+/* Info panel */
+.info-panel{position:fixed;top:12px;right:12px;background:#0f2438;border:1px solid #153955;border-radius:10px;padding:16px;z-index:10;display:none;max-width:340px;max-height:80vh;overflow-y:auto}
+.info-panel.show{display:block}
+.info-panel h3{margin:0;font-size:14px;color:#e6edf3}
+.info-close{background:none;border:none;color:#7fb3de;font-size:20px;padding:0 4px;cursor:pointer;opacity:0.6;line-height:1}
+.info-close:hover{opacity:1;color:#ff6b6b}
+.info-section{display:flex;flex-direction:column;gap:6px}
+.info-item{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.04);cursor:pointer;transition:background .15s ease}
+.info-item:hover{background:rgba(45,108,223,0.2)}
+.info-icon{font-size:18px;flex-shrink:0;margin-top:2px}
+.info-label{font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:#7fb3de;margin-bottom:2px}
+.info-query{font-size:12px;color:#c8ddf0;line-height:1.4}
+
+/* Suggestion pills for "Did you mean?" */
+.suggestion-pill{background:linear-gradient(135deg,#2e6ea2 0%,#1a4d6e 100%);color:#fff;border:none;border-radius:20px;padding:8px 16px;font-size:12px;cursor:pointer;transition:all .2s ease;box-shadow:0 2px 4px rgba(0,0,0,.2);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.suggestion-pill:hover{background:linear-gradient(135deg,#4ea1d3 0%,#2e6ea2 100%);transform:translateY(-2px);box-shadow:0 4px 8px rgba(0,0,0,.3)}
+
+/* Skeleton loading shimmer */
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.skeleton{background:linear-gradient(90deg,rgba(255,255,255,0.04) 25%,rgba(255,255,255,0.08) 50%,rgba(255,255,255,0.04) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:6px}
+.skeleton-card{padding:16px;margin:8px 0;border-radius:10px;background:#153955}
+.skeleton-line{height:14px;margin:8px 0}
+.skeleton-line.w80{width:80%}.skeleton-line.w60{width:60%}.skeleton-line.w40{width:40%}
+.skeleton-chart{height:180px;margin:12px 0}
+
+/* Light theme overrides */
+body.light-theme{background:#f0f4f8;color:#1a2332}
+body.light-theme header,body.light-theme form#promptForm{background:#fff;border-color:#d0d8e0}
+body.light-theme .message.user{background:#e3ecf5}
+body.light-theme .message.assistant{background:#dce8f3}
+body.light-theme .message.system{background:#eaf0f7}
+body.light-theme #promptInput{background:#f7f9fc;border-color:#c0cad8;color:#1a2332}
+body.light-theme .settings,body.light-theme .info-panel{background:#fff;border-color:#d0d8e0}
+body.light-theme .settings input{background:#f7f9fc;border-color:#c0cad8;color:#1a2332}
+body.light-theme .info-item{background:rgba(0,0,0,0.03)}
+body.light-theme .info-item:hover{background:rgba(45,108,223,0.1)}
+body.light-theme .info-label{color:#2d6cdf}
+body.light-theme .info-query{color:#3a4a5c}
+body.light-theme canvas{filter:invert(1) hue-rotate(180deg)}
+
+/* Typeahead dropdown */
+.typeahead-wrap{position:relative}
+.typeahead-dropdown{position:absolute;bottom:100%;left:0;right:60px;background:#0f2438;border:1px solid #153955;border-bottom:none;border-radius:8px 8px 0 0;max-height:200px;overflow-y:auto;display:none;z-index:20}
+body.light-theme .typeahead-dropdown{background:#fff;border-color:#d0d8e0}
+.typeahead-dropdown.show{display:block}
+.typeahead-item{padding:8px 12px;cursor:pointer;font-size:12px;color:#d1e4f3;border-bottom:1px solid rgba(255,255,255,0.05)}
+body.light-theme .typeahead-item{color:#3a4a5c;border-color:rgba(0,0,0,0.06)}
+.typeahead-item:hover,.typeahead-item.active{background:rgba(45,108,223,0.2)}
+.typeahead-item .inst-name{font-weight:bold}
+.typeahead-item .inst-detail{font-size:10px;opacity:0.6;margin-top:2px}
+
+/* Query history in info panel */
+.history-item{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:12px;color:#c8ddf0;transition:background .15s ease}
+.history-item:hover{background:rgba(45,108,223,0.15)}
+.history-time{font-size:10px;opacity:0.4;white-space:nowrap}
+.history-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fav-btn{background:none;border:none;cursor:pointer;font-size:13px;padding:2px 4px;opacity:0.3;transition:opacity .2s}
+.fav-btn:hover,.fav-btn.active{opacity:1}
+
+/* Keyboard shortcut hint */
+.shortcut-hint{position:absolute;right:70px;top:50%;transform:translateY(-50%);font-size:10px;opacity:0.25;pointer-events:none;font-family:monospace}
+
+/* Fair lending alert */
+.fair-lending-alert{padding:12px;margin:12px 0;border-radius:8px;border-left:4px solid #ffa500;background:rgba(255,165,0,0.08)}
+.fair-lending-alert.critical{border-left-color:#ff6b6b;background:rgba(255,107,107,0.08)}
+.fair-lending-alert .alert-title{font-weight:bold;margin-bottom:4px;font-size:13px}
+.fair-lending-alert .alert-detail{font-size:11px;opacity:0.85;line-height:1.5}
+
+/* Offline indicator */
+.offline-banner{background:#ff6b6b;color:#fff;text-align:center;padding:4px;font-size:11px;display:none}
+.offline-banner.show{display:block}
+
+/* Print styles */
+@media print{header,form#promptForm,.settings,.info-panel,button{display:none!important}body{background:#fff!important;color:#000!important}main#chat{overflow:visible!important}.message{background:#f5f5f5!important;color:#000!important;max-width:100%!important;page-break-inside:avoid}canvas{max-width:100%!important}}
