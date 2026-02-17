@@ -523,7 +523,47 @@ function fixMalformedJSON(jsonStr) {
   return fixed;
 }
 
+// State name/abbreviation lookup
+const STATE_MAP = {alabama:'AL',alaska:'AK',arizona:'AZ',arkansas:'AR',california:'CA',colorado:'CO',connecticut:'CT',delaware:'DE','district of columbia':'DC',florida:'FL',georgia:'GA',hawaii:'HI',idaho:'ID',illinois:'IL',indiana:'IN',iowa:'IA',kansas:'KS',kentucky:'KY',louisiana:'LA',maine:'ME',maryland:'MD',massachusetts:'MA',michigan:'MI',minnesota:'MN',mississippi:'MS',missouri:'MO',montana:'MT',nebraska:'NE',nevada:'NV','new hampshire':'NH','new jersey':'NJ','new mexico':'NM','new york':'NY','north carolina':'NC','north dakota':'ND',ohio:'OH',oklahoma:'OK',oregon:'OR',pennsylvania:'PA','rhode island':'RI','south carolina':'SC','south dakota':'SD',tennessee:'TN',texas:'TX',utah:'UT',vermont:'VT',virginia:'VA',washington:'WA','west virginia':'WV',wisconsin:'WI',wyoming:'WY'};
+const STATE_ABBR_MAP = {al:'AL',ak:'AK',az:'AZ',ar:'AR',ca:'CA',co:'CO',ct:'CT',dc:'DC',de:'DE',fl:'FL',ga:'GA',hi:'HI',id:'ID',il:'IL','in':'IN',ia:'IA',ks:'KS',ky:'KY',la:'LA',me:'ME',md:'MD',ma:'MA',mi:'MI',mn:'MN',ms:'MS',mo:'MO',mt:'MT',ne:'NE',nv:'NV',nh:'NH',nj:'NJ',nm:'NM',ny:'NY',nc:'NC',nd:'ND',oh:'OH',ok:'OK',or:'OR',pa:'PA',ri:'RI',sc:'SC',sd:'SD',tn:'TN',tx:'TX',ut:'UT',vt:'VT',va:'VA',wa:'WA',wv:'WV',wi:'WI',wy:'WY'};
+const STATE_NAMES = Object.fromEntries(Object.entries(STATE_MAP).map(([name, code]) => [code, name.replace(/\b\w/g, c => c.toUpperCase())]));
+
+// Detect state code from query text
+function detectState(text) {
+  const lower = text.toLowerCase();
+  for (const [name, code] of Object.entries(STATE_MAP)) {
+    if (lower.includes(name)) return code;
+  }
+  const words = lower.split(/\s+/);
+  for (const w of words) {
+    if (STATE_ABBR_MAP[w]) return STATE_ABBR_MAP[w];
+  }
+  return null;
+}
+
 // Build FFIEC Data Browser URL
+// Extract institution names from query text (bypasses Phi for comparison queries)
+function extractInstitutionNames(query) {
+  const names = [];
+  // Match names ending with known institution suffixes
+  const pattern = /([A-Z][A-Za-z\s]*?(?:Credit Union|Bank(?:ing)?|Mortgage|Savings|Financial|Association|Corp(?:oration)?))/g;
+  let match;
+  // Common words that aren't part of institution names
+  const stopWords = ['compare','how','does','what','is','the','show','me','analyze','get','find','list','between','do','are','in','for','of','to','vs','versus','and','or','a','an'];
+  while ((match = pattern.exec(query)) !== null) {
+    let name = match[1].trim();
+    // Strip leading stop words (e.g. "Compare Mountain..." -> "Mountain...")
+    const words = name.split(/\s+/);
+    while (words.length > 1 && stopWords.includes(words[0].toLowerCase())) {
+      words.shift();
+    }
+    name = words.join(' ');
+    if (name.length > 3) names.push(name);
+  }
+  // Deduplicate: if one name is substring of another, keep the longer one
+  return names.filter((n, i) => !names.some((other, j) => j !== i && other.includes(n) && other.length > n.length));
+}
+
 function buildFFIECUrl(endpoint, params) {
   const base = 'https://ffiec.cfpb.gov/v2/data-browser-api/view/';
   const url = new URL(base + (endpoint || 'aggregations'));
@@ -655,6 +695,31 @@ async function fetchNationalAverages(year = '2024', loanType = null) {
     
   } catch (error) {
     addMessage('system', `⚠️ Error fetching national data: ${error.message}`);
+    return null;
+  }
+}
+
+// Fetch state-level lending statistics for comparison
+async function fetchStateAverages(state, year = '2024', loanType = null) {
+  try {
+    const stateNames = {AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',CT:'Connecticut',DE:'Delaware',DC:'District of Columbia',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',MS:'Mississippi',MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',VA:'Virginia',WA:'Washington',WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming'};
+    const stateName = stateNames[state.toUpperCase()] || state;
+    addMessage('system', `📊 Fetching ${stateName} state lending averages for ${year}...`);
+
+    const params = { years: year, states: state.toUpperCase(), actions_taken: '1' };
+    if (loanType) params.loan_types = loanType;
+
+    const url = buildFFIECUrl('aggregations', params);
+    const data = await fetchFFIECData(url, 1);
+
+    if (!data.aggregations || data.aggregations.length === 0) return null;
+
+    const totalLoans = data.aggregations.reduce((sum, agg) => sum + (agg.count || 0), 0);
+    addMessage('system', `✅ ${stateName} data: ${totalLoans.toLocaleString()} originated loans`);
+
+    return { totalLoans, aggregations: data.aggregations, year, state: state.toUpperCase(), stateName };
+  } catch (error) {
+    addMessage('system', `⚠️ Error fetching state data: ${error.message}`);
     return null;
   }
 }
@@ -1897,6 +1962,7 @@ form.addEventListener('submit', async (e) => {
   if (!text) return;
 
   input.value = '';
+  if (typeaheadDropdown) typeaheadDropdown.classList.remove('show');
   historyIndex = -1;
   savedInput = '';
   QueryHistory.add(text);
@@ -1919,18 +1985,89 @@ form.addEventListener('submit', async (e) => {
       }
     }
 
-    // Step 1: Use Phi mini to understand text and form URI
-    addMessage('system', '🤖 Phi mini analyzing your message...');
-    const planText = await localPhi.generatePlan(text);
-    if (showDiag) addMessage('system', `📋 Phi response: ${planText.slice(0, 250)}...`);
+    // For comparison queries: extract institution names first, then use Phi for filters only
+    const lowerText = text.toLowerCase();
+    const isCompareQuery = (lowerText.includes('compar') || lowerText.includes(' vs ') ||
+      lowerText.includes('versus') || lowerText.includes('between') || lowerText.includes('differ'));
+    const extractedNames = extractInstitutionNames(text);
+
+    let planText = null;
+    let plan = null;
+
+    if (isCompareQuery && extractedNames.length >= 1) {
+      addMessage('system', `🔍 Found institutions: ${extractedNames.map(n => `"${n}"`).join(', ')}`);
+
+      // Strip institution names from query, send remaining text to Phi for filter extraction
+      let filterQuery = text;
+      extractedNames.forEach(name => { filterQuery = filterQuery.replace(name, ''); });
+      // Clean up separators
+      filterQuery = filterQuery.replace(/\b(compare|vs\.?|versus|between|and|to|with|comparison|lending)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+
+      // Build base plan from extracted names
+      if (extractedNames.length >= 2) {
+        plan = { intent: 'analysis', analysis_type: 'compare_institutions', institution_name: extractedNames[0], institution_name_2: extractedNames[1], endpoint: 'filers', params: { years: '2024' } };
+      } else {
+        // Detect state average vs national average
+        const hasStateContext = lowerText.includes('average') || lowerText.includes('market') || lowerText.includes('state');
+        const detectedState = hasStateContext ? detectState(text) : null;
+
+        if (detectedState) {
+          plan = { intent: 'analysis', analysis_type: 'compare_to_state', institution_name: extractedNames[0], compare_state: detectedState, endpoint: 'filers', params: { years: '2024' } };
+        } else {
+          plan = { intent: 'analysis', analysis_type: 'compare_to_national', institution_name: extractedNames[0], endpoint: 'filers', params: { years: '2024' } };
+        }
+      }
+
+      // If there are remaining filter words (e.g. "VA loans", "2024", "in Utah"), ask Phi to parse them
+      if (filterQuery.length > 2) {
+        addMessage('system', `🤖 Phi mini extracting filters from: "${filterQuery}"...`);
+        try {
+          const filterPlanText = await localPhi.generatePlan(filterQuery);
+          const filterPlan = parseJSON(filterPlanText);
+          if (filterPlan?.params) {
+            // Merge Phi's filters into our plan
+            plan.params = { ...plan.params, ...filterPlan.params };
+            if (showDiag) addMessage('system', `📋 Phi filters: ${JSON.stringify(filterPlan.params)}`);
+          }
+        } catch (phiErr) {
+          addMessage('system', '⚠️ Could not extract additional filters — using defaults (2024)');
+          console.error('Phi filter extraction failed:', phiErr);
+        }
+      }
+
+      addMessage('system', `📊 Comparing with params: ${JSON.stringify(plan.params)}`);
+    }
+
+    // Detect market overview queries (e.g. "California mortgage market overview")
+    if (!plan) {
+      const isOverview = lowerText.includes('overview') || lowerText.includes('market summary') ||
+        lowerText.includes('market report') || lowerText.includes('lending summary') ||
+        (lowerText.includes('market') && !lowerText.includes('average'));
+      const overviewState = isOverview ? detectState(text) : null;
+
+      if (isOverview && overviewState) {
+        plan = { intent: 'market_overview', analysis_type: 'market_overview', state: overviewState, endpoint: 'aggregations', params: { years: '2024', states: overviewState } };
+        addMessage('system', `📊 Market overview for ${STATE_NAMES[overviewState] || overviewState}`);
+      }
+    }
+
+    if (!plan) {
+      // Standard Phi flow for non-comparison queries
+      addMessage('system', '🤖 Phi mini analyzing your message...');
+      try {
+        planText = await localPhi.generatePlan(text);
+        if (showDiag) addMessage('system', `📋 Phi response: ${planText.slice(0, 250)}...`);
+        plan = parseJSON(planText);
+      } catch (phiErr) {
+        console.error('Phi generatePlan failed:', phiErr);
+      }
+    }
 
     hideSkeleton();
 
-    // Step 2: Parse plan JSON
-    const plan = parseJSON(planText);
     if (!plan) {
       addMessage('system', '❌ Could not parse response from Phi mini');
-      addMessage('assistant', planText);
+      if (planText) addMessage('assistant', planText);
       return;
     }
 
@@ -1962,6 +2099,136 @@ form.addEventListener('submit', async (e) => {
       const trendParams = { ...plan.params };
       delete trendParams.years; // we'll iterate over years
       await handleTrendQuery(trendParams, text);
+      addReportButtons();
+      return;
+    }
+
+    // Check if this is a market overview query
+    if (plan.analysis_type === 'market_overview' && plan.state) {
+      const year = plan.params?.years || '2024';
+      const stName = STATE_NAMES[plan.state] || plan.state;
+      addMessage('assistant', `📊 **${stName} Mortgage Market Overview (${year})**`);
+
+      // Fetch multiple data points in parallel
+      const [originated, denied, loanType1, loanType2, loanType3, loanType4, purp1, purp31] = await Promise.all([
+        fetchFFIECData(buildFFIECUrl('aggregations', { years: year, states: plan.state, actions_taken: '1' }), 1).catch(() => null),
+        fetchFFIECData(buildFFIECUrl('aggregations', { years: year, states: plan.state, actions_taken: '3' }), 1).catch(() => null),
+        fetchFFIECData(buildFFIECUrl('aggregations', { years: year, states: plan.state, actions_taken: '1', loan_types: '1' }), 1).catch(() => null),
+        fetchFFIECData(buildFFIECUrl('aggregations', { years: year, states: plan.state, actions_taken: '1', loan_types: '2' }), 1).catch(() => null),
+        fetchFFIECData(buildFFIECUrl('aggregations', { years: year, states: plan.state, actions_taken: '1', loan_types: '3' }), 1).catch(() => null),
+        fetchFFIECData(buildFFIECUrl('aggregations', { years: year, states: plan.state, actions_taken: '1', loan_types: '4' }), 1).catch(() => null),
+        fetchFFIECData(buildFFIECUrl('aggregations', { years: year, states: plan.state, actions_taken: '1', loan_purposes: '1' }), 1).catch(() => null),
+        fetchFFIECData(buildFFIECUrl('aggregations', { years: year, states: plan.state, actions_taken: '1', loan_purposes: '31' }), 1).catch(() => null),
+      ]);
+
+      const sumAgg = (d) => d?.aggregations?.reduce((s, a) => s + (a.count || 0), 0) || 0;
+      const totalOrig = sumAgg(originated);
+      const totalDenied = sumAgg(denied);
+      const totalApps = totalOrig + totalDenied;
+      const approvalRate = totalApps > 0 ? ((totalOrig / totalApps) * 100).toFixed(1) : 'N/A';
+
+      const convLoans = sumAgg(loanType1);
+      const fhaLoans = sumAgg(loanType2);
+      const vaLoans = sumAgg(loanType3);
+      const usdaLoans = sumAgg(loanType4);
+      const purchaseLoans = sumAgg(purp1);
+      const refiLoans = sumAgg(purp31);
+
+      // Render overview card
+      const container = document.createElement('div');
+      container.style.cssText = 'background: #1a3550; border-radius: 12px; padding: 16px; margin: 8px 0;';
+
+      const title = document.createElement('h3');
+      title.textContent = `${stName} Lending Market — ${year}`;
+      title.style.cssText = 'color: #4ea1d3; margin: 0 0 12px; font-size: 14px;';
+      container.appendChild(title);
+
+      // Summary stats
+      let tableHtml = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <tr style="border-bottom:2px solid #2e6ea2;">
+          <th style="text-align:left;padding:8px;color:#7fb3de;" colspan="2">Key Metrics</th>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:6px;color:#c8ddf0;">Total Originated Loans</td>
+          <td style="text-align:right;padding:6px;color:#50c878;font-weight:bold;">${totalOrig.toLocaleString()}</td>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:6px;color:#c8ddf0;">Total Denied</td>
+          <td style="text-align:right;padding:6px;color:#ff6b6b;font-weight:bold;">${totalDenied.toLocaleString()}</td>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:6px;color:#c8ddf0;">Approval Rate</td>
+          <td style="text-align:right;padding:6px;color:#50c878;font-weight:bold;">${approvalRate}%</td>
+        </tr>
+        <tr style="border-bottom:2px solid #2e6ea2;">
+          <th style="text-align:left;padding:8px;color:#7fb3de;" colspan="2">By Loan Type</th>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:6px;color:#c8ddf0;">Conventional</td>
+          <td style="text-align:right;padding:6px;font-weight:bold;">${convLoans.toLocaleString()}</td>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:6px;color:#c8ddf0;">FHA</td>
+          <td style="text-align:right;padding:6px;font-weight:bold;">${fhaLoans.toLocaleString()}</td>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:6px;color:#c8ddf0;">VA</td>
+          <td style="text-align:right;padding:6px;font-weight:bold;">${vaLoans.toLocaleString()}</td>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:6px;color:#c8ddf0;">USDA</td>
+          <td style="text-align:right;padding:6px;font-weight:bold;">${usdaLoans.toLocaleString()}</td>
+        </tr>
+        <tr style="border-bottom:2px solid #2e6ea2;">
+          <th style="text-align:left;padding:8px;color:#7fb3de;" colspan="2">By Purpose</th>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:6px;color:#c8ddf0;">Home Purchase</td>
+          <td style="text-align:right;padding:6px;font-weight:bold;">${purchaseLoans.toLocaleString()}</td>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:6px;color:#c8ddf0;">Refinance</td>
+          <td style="text-align:right;padding:6px;font-weight:bold;">${refiLoans.toLocaleString()}</td>
+        </tr>
+      </table>`;
+
+      const tableDiv = document.createElement('div');
+      tableDiv.innerHTML = tableHtml;
+      container.appendChild(tableDiv);
+
+      // Donut chart for loan type breakdown
+      const chartData = [
+        { type: 'Conventional', count: convLoans },
+        { type: 'FHA', count: fhaLoans },
+        { type: 'VA', count: vaLoans },
+        { type: 'USDA', count: usdaLoans },
+      ].filter(d => d.count > 0);
+
+      if (chartData.length > 0 && typeof renderDonutChart === 'function') {
+        const chartContainer = document.createElement('div');
+        chartContainer.style.marginTop = '12px';
+        container.appendChild(chartContainer);
+        renderDonutChart(chartData, chartContainer);
+      }
+
+      chat.appendChild(container);
+      chat.scrollTop = chat.scrollHeight;
+
+      // AI summary
+      if (localPhi.initialized) {
+        addMessage('system', '🤖 Phi mini generating market insights...');
+        const overviewPrompt = `${stName} mortgage market ${year} (loan COUNTS not dollars):
+Total originated: ${totalOrig.toLocaleString()}, Denied: ${totalDenied.toLocaleString()}, Approval rate: ${approvalRate}%
+Conventional: ${convLoans.toLocaleString()}, FHA: ${fhaLoans.toLocaleString()}, VA: ${vaLoans.toLocaleString()}, USDA: ${usdaLoans.toLocaleString()}
+Purchase: ${purchaseLoans.toLocaleString()}, Refinance: ${refiLoans.toLocaleString()}
+
+Provide 3-4 brief insights about this state's lending market.`;
+        try {
+          const summary = await localPhi.session.prompt(overviewPrompt);
+          addMessage('assistant', `💡 **Market Insights:**\n${summary}`);
+        } catch (_e) { /* Phi summary is optional */ }
+      }
+
       addReportButtons();
       return;
     }
@@ -2062,6 +2329,102 @@ Provide 2-3 brief insights comparing their lending performance.`;
 
       addReportButtons();
       if (showDiag) addMessage('system', '✅ Comparison complete!');
+      return;
+    }
+
+    // Check if this is an institution vs state average query
+    if (plan.analysis_type === 'compare_to_state' && plan.institution_name && plan.compare_state) {
+      const year = plan.params?.years || '2024';
+      addMessage('assistant', `🔍 Comparing "${plan.institution_name}" to ${plan.compare_state} state average...`);
+
+      const searchResult = await findInstitutionByName(plan.institution_name, year);
+      if (!searchResult.found) {
+        addMessage('system', `⚠️ Could not find "${plan.institution_name}"`);
+        if (searchResult.suggestions?.length > 0) renderInstitutionSuggestions(searchResult.suggestions, plan.institution_name);
+        return;
+      }
+
+      const institution = searchResult.primary;
+      addMessage('system', `✅ Found: ${institution.name} (LEI: ${institution.lei})`);
+
+      // Fetch institution data and state data in parallel
+      const [instAnalysis, stateData] = await Promise.all([
+        analyzeInstitution(institution.lei, institution.name, year),
+        fetchStateAverages(plan.compare_state, year)
+      ]);
+
+      if (!instAnalysis || !stateData) {
+        addMessage('system', '❌ Failed to fetch comparison data');
+        return;
+      }
+
+      // Calculate state-level metrics from aggregations
+      const stateDeniedParams = { years: year, states: plan.compare_state, actions_taken: '3' };
+      const stateDeniedUrl = buildFFIECUrl('aggregations', stateDeniedParams);
+      let stateDenied = 0;
+      try {
+        const deniedData = await fetchFFIECData(stateDeniedUrl, 1);
+        stateDenied = deniedData?.aggregations?.reduce((s, a) => s + (a.count || 0), 0) || 0;
+      } catch (_e) { /* ignore */ }
+      const stateTotal = stateData.totalLoans + stateDenied;
+      const stateApprovalRate = stateTotal > 0 ? ((stateData.totalLoans / stateTotal) * 100).toFixed(1) : 'N/A';
+
+      // Render comparison
+      const container = document.createElement('div');
+      container.style.cssText = 'background: #1a3550; border-radius: 12px; padding: 16px; margin: 8px 0;';
+
+      const title = document.createElement('h3');
+      title.textContent = `📊 ${institution.name} vs ${stateData.stateName} State Average`;
+      title.style.cssText = 'color: #4ea1d3; margin: 0 0 12px; font-size: 14px;';
+      container.appendChild(title);
+
+      const rows = [
+        ['Total Originated Loans', instAnalysis.totalLoans.toLocaleString(), stateData.totalLoans.toLocaleString()],
+        ['Denied', instAnalysis.approvalData?.denied?.toLocaleString() || 'N/A', stateDenied.toLocaleString()],
+        ['Approval Rate', (instAnalysis.approvalData?.approvalRate || 'N/A') + '%', stateApprovalRate + '%'],
+      ];
+
+      // Add loan type breakdown
+      if (instAnalysis.loanTypeBreakdown) {
+        instAnalysis.loanTypeBreakdown.forEach(b => {
+          rows.push([b.type, b.count.toLocaleString(), '—']);
+        });
+      }
+
+      let tableHtml = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <tr style="border-bottom:1px solid #2e6ea2;">
+          <th style="text-align:left;padding:6px;color:#7fb3de;">Metric</th>
+          <th style="text-align:right;padding:6px;color:#50c878;">${institution.name}</th>
+          <th style="text-align:right;padding:6px;color:#f0a050;">${stateData.stateName} Avg</th>
+        </tr>`;
+      for (const [metric, v1, v2] of rows) {
+        tableHtml += `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:6px;color:#c8ddf0;">${metric}</td>
+          <td style="text-align:right;padding:6px;color:#50c878;font-weight:bold;">${v1}</td>
+          <td style="text-align:right;padding:6px;color:#f0a050;font-weight:bold;">${v2}</td>
+        </tr>`;
+      }
+      tableHtml += '</table>';
+
+      const tableDiv = document.createElement('div');
+      tableDiv.innerHTML = tableHtml;
+      container.appendChild(tableDiv);
+      chat.appendChild(container);
+      chat.scrollTop = chat.scrollHeight;
+
+      // AI summary
+      if (localPhi.initialized) {
+        addMessage('system', '🤖 Phi mini generating insights...');
+        const statePrompt = `Compare this institution to the ${stateData.stateName} state average (loan COUNTS, not dollars):
+${institution.name}: ${instAnalysis.totalLoans.toLocaleString()} originated loans, ${instAnalysis.approvalData?.approvalRate}% approval rate
+${stateData.stateName} state: ${stateData.totalLoans.toLocaleString()} originated loans, ${stateApprovalRate}% approval rate
+
+Provide 2-3 brief insights about how this institution compares to the state average.`;
+        const summary = await localPhi.session.prompt(statePrompt);
+        addMessage('assistant', `💡 **State Comparison Insights:**\n${summary}`);
+      }
+
+      addReportButtons();
       return;
     }
 
@@ -2650,6 +3013,7 @@ function renderInstitutionSuggestions(suggestions, _originalQuery) {
 
   suggestions.slice(0, 5).forEach((inst) => {
     const pill = document.createElement('button');
+    pill.type = 'button';
     pill.className = 'suggestion-pill';
     pill.textContent = inst.name;
     pill.title = `${inst.city || ''} ${inst.state || ''} • LEI: ${inst.lei}`;
@@ -2682,10 +3046,18 @@ function renderInstitutionSuggestions(suggestions, _originalQuery) {
       pill.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)';
     });
 
-    // Click to analyze
-    pill.addEventListener('click', () => {
-      addMessage('user', `Analyze ${inst.name}`);
-      analyzeInstitutionByLEI(inst.lei, inst.name);
+    // Click to populate input with institution name
+    pill.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const promptInput = document.getElementById('promptInput');
+      if (promptInput) {
+        promptInput.value = inst.name;
+        promptInput.dispatchEvent(new Event('input', { bubbles: true }));
+        promptInput.focus();
+        // Scroll input into view in case chat pushed it off screen
+        promptInput.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
     });
 
     pillContainer.appendChild(pill);
@@ -3293,11 +3665,30 @@ function showTypeahead(matches) {
     const div = document.createElement('div');
     div.className = 'typeahead-item' + (idx === 0 ? ' active' : '');
     div.innerHTML = `<div class="inst-name">${m.name}</div><div class="inst-detail">${[m.city, m.state].filter(Boolean).join(', ')}</div>`;
-    div.addEventListener('click', () => {
-      // Replace institution name in input
+    div.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      // Replace only the partial institution name, keep the prefix (e.g. "compare")
       const val = input.value;
-      // Try to find what the user typed and replace it
-      input.value = val.replace(/[\w\s]+$/, '') ? val.replace(/[\w\s]+$/, m.name) : m.name;
+      const nameWords = m.name.toLowerCase().split(/\s+/);
+      // Find where the institution name starts in the input by matching the first word
+      const firstWord = nameWords[0];
+      const lowerVal = val.toLowerCase();
+      const startIdx = lowerVal.indexOf(firstWord);
+      if (startIdx >= 0) {
+        input.value = val.substring(0, startIdx) + m.name;
+      } else {
+        // Fallback: replace last few words that overlap with the name
+        const inputWords = val.split(/\s+/);
+        let overlapStart = inputWords.length;
+        for (let i = inputWords.length - 1; i >= 0; i--) {
+          if (nameWords.some(nw => nw.startsWith(inputWords[i].toLowerCase()) || inputWords[i].toLowerCase().startsWith(nw))) {
+            overlapStart = i;
+          } else {
+            break;
+          }
+        }
+        input.value = inputWords.slice(0, overlapStart).join(' ') + (overlapStart > 0 ? ' ' : '') + m.name;
+      }
       typeaheadDropdown.classList.remove('show');
       input.focus();
     });
@@ -3583,7 +3974,27 @@ function addReportButtons() {
   const printBtn = document.createElement('button');
   printBtn.textContent = '🖨️ Print Report';
   printBtn.style.cssText = 'padding:8px 14px;font-size:12px;';
-  printBtn.addEventListener('click', () => window.print());
+  printBtn.addEventListener('click', () => {
+    // Find the last user message, then collect everything after it (tables, charts, summaries)
+    const allMessages = Array.from(chat.querySelectorAll('.message'));
+    let lastUserIdx = -1;
+    allMessages.forEach((m, i) => { if (m.classList.contains('user')) lastUserIdx = i; });
+
+    // Mark messages before the last query as print-hidden
+    allMessages.forEach((m, i) => {
+      if (i < lastUserIdx) {
+        m.setAttribute('data-print-hide', 'true');
+      } else if (m.classList.contains('system')) {
+        // Hide system/debug messages, keep user question + assistant results
+        m.setAttribute('data-print-hide', 'true');
+      }
+    });
+
+    window.print();
+
+    // Restore after print
+    allMessages.forEach(m => m.removeAttribute('data-print-hide'));
+  });
   container.appendChild(printBtn);
 
   // Copy last query

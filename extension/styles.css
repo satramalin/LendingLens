@@ -92,4 +92,4 @@ body.light-theme .typeahead-item{color:#3a4a5c;border-color:rgba(0,0,0,0.06)}
 .offline-banner.show{display:block}
 
 /* Print styles */
-@media print{header,form#promptForm,.settings,.info-panel,button{display:none!important}body{background:#fff!important;color:#000!important}main#chat{overflow:visible!important}.message{background:#f5f5f5!important;color:#000!important;max-width:100%!important;page-break-inside:avoid}canvas{max-width:100%!important}}
+@media print{header,form#promptForm,.settings,.info-panel,button{display:none!important}body{background:#fff!important;color:#000!important}main#chat{overflow:visible!important}.message{background:#f5f5f5!important;color:#000!important;max-width:100%!important;page-break-inside:avoid}.message[data-print-hide="true"]{display:none!important}canvas{max-width:100%!important}}

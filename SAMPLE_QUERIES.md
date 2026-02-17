@@ -113,7 +113,7 @@
 - "Asian borrowers in Washington state"
 
 **Ethnicity:**
-- "Ethnicity breakdown of FHA loans"
+- "Ethnicity breakdown of FHA loans in Utah"
 - "Show me ethnic distribution of loans in New York"
 - "Hispanic borrowers in Texas"
 - "Ethnicity analysis for conventional loans"
@@ -226,6 +226,12 @@ The extension automatically caches data for faster queries:
 - "How does Navy Federal Credit Union differ from national lending average?"
 - "Compare Mountain America Federal Credit Union to national lending statistics"
 - "Analyze Pentagon Federal Credit Union compared to national average"
+
+**Institution vs State Average:**
+- "Mountain America Federal Credit Union vs Utah state average"
+- "Compare Navy Federal Credit Union to Virginia market average"
+- "How does America First Federal Credit Union compare to Utah average?"
+- "Pentagon Federal Credit Union vs California state average"
 
 **Time Comparisons:**
 - "VA loans in 2024 vs 2023"
