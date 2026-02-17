@@ -449,7 +449,7 @@ Output JSON only:`;
       ? data.slice(0, 3000)
       : JSON.stringify(data).slice(0, 3000);
 
-    const prompt = `User asked: "${userQuery}"\n\nData received:\n${dataStr}\n\nProvide a brief summary with key numbers and insights.`;
+    const prompt = `User asked: "${userQuery}"\n\nData:\n${dataStr}\n\nONLY use numbers from the data above. Do NOT invent any figures. Write 2-3 short bullet points summarizing the key findings.`;
     return await this._executePrompt(prompt);
   }
 }
@@ -539,6 +539,53 @@ function detectState(text) {
     if (STATE_ABBR_MAP[w]) return STATE_ABBR_MAP[w];
   }
   return null;
+}
+
+// Keyword-based fallback parser when Phi fails to produce JSON
+function fallbackParsePlan(query) {
+  const lower = query.toLowerCase();
+  const params = { years: '2024' };
+
+  // Detect state
+  const state = detectState(query);
+  if (state) params.states = state;
+
+  // Detect year
+  const yearMatch = lower.match(/\b(20[12]\d)\b/);
+  if (yearMatch) params.years = yearMatch[1];
+
+  // Detect loan types
+  if (lower.includes('fha')) params.loan_types = '2';
+  else if (lower.includes('va loan') || lower.match(/\bva\b/)) params.loan_types = '3';
+  else if (lower.includes('conventional')) params.loan_types = '1';
+  else if (lower.includes('usda')) params.loan_types = '4';
+
+  // Detect loan purposes (check cash-out before general refinance)
+  if (lower.includes('cash-out') || lower.includes('cash out')) params.loan_purposes = '32';
+  else if (lower.includes('refinanc') || lower.includes('refi')) params.loan_purposes = '31';
+  else if (lower.includes('purchase') || lower.includes('home buy')) params.loan_purposes = '1';
+  else if (lower.includes('improvement') || lower.includes('home improve')) params.loan_purposes = '2';
+
+  // Detect actions
+  if (lower.includes('denied') || lower.includes('denial')) params.actions_taken = '3';
+  else if (lower.includes('originated') || lower.includes('approved')) params.actions_taken = '1';
+
+  // Detect demographics
+  if (lower.includes('race') || lower.includes('racial')) params.races = '';
+  if (lower.includes('gender') || lower.includes('sex ') || lower.includes('male') || lower.includes('female')) params.sexes = '';
+  if (lower.includes('ethnicity') || lower.includes('hispanic') || lower.includes('latino')) params.ethnicities = '';
+
+  // Detect endpoint
+  let endpoint = 'aggregations';
+  if (lower.includes('lender') || lower.includes('institution') || lower.includes('top bank') || lower.includes('top credit')) {
+    endpoint = 'filers';
+  }
+
+  // Need at least one meaningful filter beyond year
+  const hasFilter = params.states || params.loan_types || params.loan_purposes || params.actions_taken || params.leis;
+  if (!hasFilter) return null;
+
+  return { intent: 'fallback_parse', endpoint, params };
 }
 
 // Build FFIEC Data Browser URL
@@ -1962,7 +2009,8 @@ form.addEventListener('submit', async (e) => {
   if (!text) return;
 
   input.value = '';
-  if (typeaheadDropdown) typeaheadDropdown.classList.remove('show');
+  clearTimeout(typeaheadTimeout);
+  if (typeaheadDropdown) { typeaheadDropdown.classList.remove('show'); typeaheadDropdown.innerHTML = ''; }
   historyIndex = -1;
   savedInput = '';
   QueryHistory.add(text);
@@ -2051,6 +2099,23 @@ form.addEventListener('submit', async (e) => {
       }
     }
 
+    // Detect "top lenders" queries
+    if (!plan) {
+      const isTopLenders = lowerText.includes('top lender') || lowerText.includes('top bank') ||
+        lowerText.includes('top credit') || lowerText.includes('biggest lender') ||
+        lowerText.includes('largest lender') || lowerText.includes('most loan') ||
+        (lowerText.includes('lender') && (lowerText.includes('top') || lowerText.includes('biggest') || lowerText.includes('largest')));
+      const topState = isTopLenders ? detectState(text) : null;
+
+      if (isTopLenders && topState) {
+        // Extract count if mentioned (e.g. "top 5", "top 10")
+        const countMatch = lowerText.match(/top\s+(\d+)/);
+        const topN = countMatch ? parseInt(countMatch[1]) : 10;
+        plan = { intent: 'top_lenders', analysis_type: 'top_lenders', state: topState, topN, endpoint: 'aggregations', params: { years: '2024', states: topState, actions_taken: '1' } };
+        addMessage('system', `📊 Finding top ${topN} lenders in ${STATE_NAMES[topState] || topState}...`);
+      }
+    }
+
     if (!plan) {
       // Standard Phi flow for non-comparison queries
       addMessage('system', '🤖 Phi mini analyzing your message...');
@@ -2065,8 +2130,16 @@ form.addEventListener('submit', async (e) => {
 
     hideSkeleton();
 
+    // Fallback: keyword-based parser when Phi fails
     if (!plan) {
-      addMessage('system', '❌ Could not parse response from Phi mini');
+      plan = fallbackParsePlan(text);
+      if (plan) {
+        addMessage('system', `⚠️ Phi couldn't parse — using keyword extraction: ${JSON.stringify(plan.params)}`);
+      }
+    }
+
+    if (!plan) {
+      addMessage('system', '❌ Could not understand the query');
       if (planText) addMessage('assistant', planText);
       return;
     }
@@ -2217,17 +2290,104 @@ form.addEventListener('submit', async (e) => {
       // AI summary
       if (localPhi.initialized) {
         addMessage('system', '🤖 Phi mini generating market insights...');
-        const overviewPrompt = `${stName} mortgage market ${year} (loan COUNTS not dollars):
+        const overviewPrompt = `ONLY use the numbers below. Do NOT invent any data not listed here.
+
+${stName} ${year} lending data:
 Total originated: ${totalOrig.toLocaleString()}, Denied: ${totalDenied.toLocaleString()}, Approval rate: ${approvalRate}%
 Conventional: ${convLoans.toLocaleString()}, FHA: ${fhaLoans.toLocaleString()}, VA: ${vaLoans.toLocaleString()}, USDA: ${usdaLoans.toLocaleString()}
 Purchase: ${purchaseLoans.toLocaleString()}, Refinance: ${refiLoans.toLocaleString()}
 
-Provide 3-4 brief insights about this state's lending market.`;
+Write exactly 3 short bullet points about this lending data. Only reference the numbers above.`;
         try {
           const summary = await localPhi.session.prompt(overviewPrompt);
           addMessage('assistant', `💡 **Market Insights:**\n${summary}`);
         } catch (_e) { /* Phi summary is optional */ }
       }
+
+      addReportButtons();
+      return;
+    }
+
+    // Check if this is a top lenders query
+    if (plan.analysis_type === 'top_lenders' && plan.state) {
+      const year = plan.params?.years || '2024';
+      const stName = STATE_NAMES[plan.state] || plan.state;
+      const topN = plan.topN || 10;
+
+      addMessage('system', `📡 Fetching lender data for ${stName}...`);
+
+      // Load filers list for name lookups
+      const filersUrl = buildFFIECUrl('filers', { years: year });
+      const filersData = await fetchFFIECData(filersUrl, 1);
+      const leiToName = {};
+      if (filersData?.institutions) {
+        filersData.institutions.forEach(inst => { leiToName[inst.lei] = inst.name; });
+      }
+
+      // Fetch state aggregation — returns data with lei in each aggregation record
+      const url = buildFFIECUrl('aggregations', { years: year, states: plan.state, actions_taken: '1' });
+      const data = await fetchFFIECData(url, 3);
+
+      if (!data?.aggregations || data.aggregations.length === 0) {
+        addMessage('system', `⚠️ No lending data found for ${stName}`);
+        return;
+      }
+
+      // Group by LEI and sum counts
+      const leiCounts = {};
+      data.aggregations.forEach(agg => {
+        const lei = agg.lei;
+        if (lei) {
+          leiCounts[lei] = (leiCounts[lei] || 0) + (agg.count || 0);
+        }
+      });
+
+      // Sort and take top N
+      const sorted = Object.entries(leiCounts)
+        .map(([lei, count]) => ({ lei, name: leiToName[lei] || lei, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, topN);
+
+      if (sorted.length === 0) {
+        addMessage('system', `⚠️ No per-lender data available for ${stName}`);
+        return;
+      }
+
+      addMessage('system', `✅ Found top ${sorted.length} lenders`);
+
+      // Render table
+      const container = document.createElement('div');
+      container.style.cssText = 'background: #1a3550; border-radius: 12px; padding: 16px; margin: 8px 0;';
+
+      const title = document.createElement('h3');
+      title.textContent = `🏆 Top ${sorted.length} Lenders in ${stName} (${year})`;
+      title.style.cssText = 'color: #4ea1d3; margin: 0 0 12px; font-size: 14px;';
+      container.appendChild(title);
+
+      let tableHtml = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <tr style="border-bottom:2px solid #2e6ea2;">
+          <th style="text-align:left;padding:8px;color:#7fb3de;">#</th>
+          <th style="text-align:left;padding:8px;color:#7fb3de;">Institution</th>
+          <th style="text-align:right;padding:8px;color:#7fb3de;">Originated Loans</th>
+        </tr>`;
+
+      sorted.forEach((lender, idx) => {
+        const barWidth = sorted[0].count > 0 ? Math.round((lender.count / sorted[0].count) * 100) : 0;
+        tableHtml += `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:6px;color:#c8ddf0;font-weight:bold;">${idx + 1}</td>
+          <td style="padding:6px;color:#c8ddf0;">${lender.name}
+            <div style="background:#2e6ea2;height:4px;border-radius:2px;margin-top:4px;width:${barWidth}%;"></div>
+          </td>
+          <td style="text-align:right;padding:6px;color:#50c878;font-weight:bold;">${lender.count.toLocaleString()}</td>
+        </tr>`;
+      });
+      tableHtml += '</table>';
+
+      const tableDiv = document.createElement('div');
+      tableDiv.innerHTML = tableHtml;
+      container.appendChild(tableDiv);
+      chat.appendChild(container);
+      chat.scrollTop = chat.scrollHeight;
 
       addReportButtons();
       return;
@@ -2318,11 +2478,15 @@ Provide 3-4 brief insights about this state's lending market.`;
       // AI summary
       if (localPhi.initialized) {
         addMessage('system', '🤖 Phi mini generating insights...');
-        const comparePrompt = `Compare these two institutions (loan COUNTS, not dollar amounts):
-${inst1.name}: ${analysis1.totalLoans.toLocaleString()} originated loans, ${analysis1.approvalData?.approvalRate}% approval rate
-${inst2.name}: ${analysis2.totalLoans.toLocaleString()} originated loans, ${analysis2.approvalData?.approvalRate}% approval rate
+        // Build full data summary for Phi
+        const loanTypes1 = (analysis1.loanTypeBreakdown || []).map(b => `${b.type}: ${b.count}`).join(', ');
+        const loanTypes2 = (analysis2.loanTypeBreakdown || []).map(b => `${b.type}: ${b.count}`).join(', ');
+        const comparePrompt = `ONLY use the numbers below. Do NOT invent percentages, market share, or any data not listed here.
 
-Provide 2-3 brief insights comparing their lending performance.`;
+${inst1.name}: ${analysis1.totalLoans.toLocaleString()} originated, ${analysis1.approvalData?.denied?.toLocaleString() || 0} denied, ${analysis1.approvalData?.approvalRate}% approval rate. Loan types: ${loanTypes1}
+${inst2.name}: ${analysis2.totalLoans.toLocaleString()} originated, ${analysis2.approvalData?.denied?.toLocaleString() || 0} denied, ${analysis2.approvalData?.approvalRate}% approval rate. Loan types: ${loanTypes2}
+
+Write exactly 3 short bullet points comparing these two. Only reference the numbers above.`;
         const summary = await localPhi.session.prompt(comparePrompt);
         addMessage('assistant', `💡 **Comparison Insights:**\n${summary}`);
       }
@@ -2415,11 +2579,12 @@ Provide 2-3 brief insights comparing their lending performance.`;
       // AI summary
       if (localPhi.initialized) {
         addMessage('system', '🤖 Phi mini generating insights...');
-        const statePrompt = `Compare this institution to the ${stateData.stateName} state average (loan COUNTS, not dollars):
-${institution.name}: ${instAnalysis.totalLoans.toLocaleString()} originated loans, ${instAnalysis.approvalData?.approvalRate}% approval rate
-${stateData.stateName} state: ${stateData.totalLoans.toLocaleString()} originated loans, ${stateApprovalRate}% approval rate
+        const statePrompt = `ONLY use the numbers below. Do NOT invent any data not listed here.
 
-Provide 2-3 brief insights about how this institution compares to the state average.`;
+${institution.name}: ${instAnalysis.totalLoans.toLocaleString()} originated, ${instAnalysis.approvalData?.denied?.toLocaleString() || 0} denied, ${instAnalysis.approvalData?.approvalRate}% approval rate
+${stateData.stateName} state total: ${stateData.totalLoans.toLocaleString()} originated, ${stateDenied.toLocaleString()} denied, ${stateApprovalRate}% approval rate
+
+Write exactly 3 short bullet points comparing the institution to the state. Only reference the numbers above.`;
         const summary = await localPhi.session.prompt(statePrompt);
         addMessage('assistant', `💡 **State Comparison Insights:**\n${summary}`);
       }
